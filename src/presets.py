@@ -3,6 +3,11 @@
 
 Per-kg values are scaled to a 70 kg adult and rounded to 0.1 to fit the
 app's slider steps.
+
+fe, the fraction of the dose excreted unchanged by the kidneys, sets how much of
+CL follows creatinine clearance when the patient panel adjusts for kidney
+function. Those values are approximate and still to be checked against the
+labels (see README, "Kidney function").
 """
 WEIGHT = 70  # kg
 
@@ -14,10 +19,12 @@ def per_kg_clearance(ml_min_kg):
 
 PRESETS = {
     "Hypothetical drug": dict(
+        fe=0.5,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral", dose=250, tau=8, cl=2.5, vd=50.0, ka=1.0, f=0.8, window=(5.0, 15.0),
         note="Made-up parameters, the same ones as the README figure.",
     ),
     "Theophylline": dict(
+        fe=0.1,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=200, tau=8,                # 600 mg/day divided every 8 h: final adult titration step [1]
         cl=per_kg_clearance(0.65),      # healthy non-smoking adults [1]
@@ -29,6 +36,7 @@ PRESETS = {
              "The label titrates this dose using measured serum concentrations.",
     ),
     "Levetiracetam": dict(
+        fe=0.66,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=1500, tau=12,              # recommended adult dose, 1500 mg twice daily [4]
         cl=per_kg_clearance(0.96),      # total body clearance [4]
@@ -40,6 +48,7 @@ PRESETS = {
              "500-5000 mg, so adding up doses (superposition) is valid.",
     ),
     "Levofloxacin": dict(
+        fe=0.87,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=500, tau=24,               # 500 mg once daily, the regimen measured in [7] Table 8
         cl=round(175 * 0.99 * 60 / 1000, 1),  # CL/F 175 mL/min x F 0.99 [7] Table 8
@@ -51,6 +60,7 @@ PRESETS = {
              "state within 48 h of once-daily dosing.",
     ),
     "Fluconazole": dict(
+        fe=0.8,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=200, tau=24,               # 200 mg once daily, a regimen measured in [8] Table 1
         cl=per_kg_clearance(0.23),      # mean body clearance 0.23 mL/min/kg [8]
@@ -63,6 +73,7 @@ PRESETS = {
              "loading dose on day 1.",
     ),
     "Valproate": dict(
+        fe=0.03,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="IV bolus",
         dose=250, tau=6,                # 1000 mg/day = 14 mg/kg/day, inside the initial 10-15 mg/kg/day,
                                         # divided as [6] requires above 250 mg/day; 6 h is a chosen interval
@@ -73,6 +84,7 @@ PRESETS = {
              "linear: protein binding saturates at higher concentrations.",
     ),
     "Gentamicin": dict(
+        fe=0.95,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="IV bolus",
         dose=70, tau=8,                 # 3 mg/kg/day in three equal doses every 8 h [2]
         cl=per_kg_clearance(1.29),      # adults 20-39 y, normal renal function [3]
@@ -82,6 +94,7 @@ PRESETS = {
              "2 mg/L. Given as a short infusion in practice; modelled here as a bolus.",
     ),
     "Vancomycin": dict(
+        fe=0.8,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="IV bolus",
         dose=1000, tau=12,              # 2 g/day as 1 g every 12 h [5]
         cl=round(0.058 * WEIGHT, 1),    # 0.058 L/kg/h [5]
@@ -92,6 +105,7 @@ PRESETS = {
              "but underestimates the first hours after each dose.",
     ),
     "Pregabalin": dict(
+        fe=0.9,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=150, tau=12,               # 300 mg/day in 2 doses, inside 150-600 mg/day in 2-3 doses [9]
         vd=round(0.5 * WEIGHT * 0.9, 1),  # Vd/F 0.5 L/kg [9] x F
@@ -103,6 +117,7 @@ PRESETS = {
              "almost entirely by the kidneys.",
     ),
     "Lacosamide": dict(
+        fe=0.4,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=200, tau=12,               # monotherapy 150-200 mg twice daily [10]
         vd=round(0.6 * WEIGHT, 1),      # 0.6 L/kg [10]
@@ -114,6 +129,7 @@ PRESETS = {
              "from 100 to 800 mg.",
     ),
     "Lamotrigine": dict(
+        fe=0.1,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=150, tau=12,               # 300 mg/day, inside the usual maintenance 225-375 mg/day [11]
         cl=round(0.58 * WEIGHT * 60 / 1000 * 0.98, 2),  # multiple-dose CL/F 0.58 mL/min/kg [11] x F
@@ -125,6 +141,7 @@ PRESETS = {
              "taking no interacting drugs: valproate roughly halves lamotrigine clearance.",
     ),
     "Topiramate": dict(
+        fe=0.7,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=200, tau=12,               # monotherapy 400 mg/day in two divided doses [12]
         cl=round(25 * 60 / 1000, 2),    # CL/F 20-30 mL/min [12], midpoint (apparent, so F = 1)
@@ -136,6 +153,7 @@ PRESETS = {
              "clearance (CL/F), so F is set to 1.",
     ),
     "Linezolid": dict(
+        fe=0.3,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=600, tau=12,               # 600 mg every 12 h, measured in [13] Table 8
         cl=round(80 * 60 / 1000, 2),    # CL 80 mL/min at 600 mg every 12 h [13] Table 8
@@ -147,6 +165,7 @@ PRESETS = {
              "at higher doses, a small nonlinearity the label calls minor.",
     ),
     "Metronidazole": dict(
+        fe=0.2,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=500, tau=6,                # 7.5 mg/kg every 6 h, "approximately 500 mg for a 70 kg adult" [14]
         cl=round(750 / 223, 2),         # not in [14]: CL/F = dose / AUC = 750 mg / 223 mg*h/L [14]
@@ -158,6 +177,7 @@ PRESETS = {
              "below the label's measured Cmax.",
     ),
     "Doxycycline": dict(
+        fe=0.4,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="Oral",
         dose=100, tau=12,               # 100 mg every 12 h for more severe infections [15]
         vd=61.1,                        # not in [15]: set so 200 mg gives 1.45 mcg/mL at 24 h, as in [15]
@@ -169,6 +189,7 @@ PRESETS = {
              "dose is 100 mg/day; 100 mg twice daily is for more severe infections.",
     ),
     "Amikacin": dict(
+        fe=0.95,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="IV bolus",
         dose=525, tau=12,               # 15 mg/kg/day as 7.5 mg/kg every 12 h [16]
         cl=round(100 * 60 / 1000, 2),   # mean serum clearance about 100 mL/min [16]
@@ -178,6 +199,7 @@ PRESETS = {
              "below 10 mg/L. Given IM or as an infusion in practice; modelled here as a bolus.",
     ),
     "Daptomycin": dict(
+        fe=0.5,  # fraction excreted unchanged in urine; see README "Kidney function"
         route="IV bolus",
         dose=420, tau=24,               # 6 mg/kg once every 24 h (S. aureus bacteremia) [17]
         cl=round(9.1 * WEIGHT / 1000, 2),  # CL 9.1 mL/h/kg at 6 mg/kg [17]
@@ -186,5 +208,22 @@ PRESETS = {
         note="No concentration range in the label, so no band is drawn. Exposure (AUC) matches "
              "the label, but like vancomycin the early peak is underestimated: daptomycin has a "
              "distribution phase this one-compartment model doesn't show.",
+    ),
+    "Phenytoin": dict(
+        route="Oral",
+        fe=0.05,                        # under 5% excreted unchanged [19]
+        dose=100, tau=8,                # initial adult dose, 100 mg three times daily [19]
+        saturable=True,
+        vmax=round(7 * WEIGHT / 24, 3),  # 7 mg/kg/day, typical adult value [18], as mg/h
+        km=4.0,                         # 4 mg/L, typical adult value [18]
+        vd=round(0.65 * WEIGHT, 1),     # 0.65 L/kg [18]
+        cl=round(7 * WEIGHT / 24 / (4.0 + 10.0), 2),  # not used while saturable: vmax / (km + C) at
+                                        # C = 10 mg/L, so switching to linear compares like with like
+        ka=0.3,                         # not in [18] or [19]: chosen so Tmax = 8 h, inside the
+                                        # 4-12 h of extended-release capsules [19]
+        f=0.92,                         # phenytoin sodium is 92% phenytoin; absorption taken as complete
+        window=(10.0, 20.0),            # therapeutic range 10-20 mcg/mL [19]
+        note="Saturable (Michaelis-Menten) elimination: dose and concentration are not "
+             "proportional. 300 mg/day settles near 5 mg/L, 390 mg/day near 11 mg/L. Try it.",
     ),
 }

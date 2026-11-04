@@ -214,3 +214,18 @@ def test_daptomycin_preset_reproduces_label():
     last = t >= 9 * p["tau"]
     assert auc(t[last], c[last]) == pytest.approx(632, abs=78)
     assert np.log(2) * p["vd"] / p["cl"] == pytest.approx(7.9, abs=1.0)
+
+
+def test_phenytoin_preset_is_nonlinear():
+    # [18] typical adult Vmax 7 mg/kg/day and Km 4 mg/L; [19] range 10-20 mcg/mL,
+    # average half-life 22 h (7 to 42 h). 390 mg/day instead of 300 (30% more) should
+    # more than double the steady-state concentration and land it in the range.
+    from src.simulate import Scenario
+    low = Scenario.from_preset(PRESETS["Phenytoin"])
+    high = Scenario.from_preset(PRESETS["Phenytoin"], dose=130)
+    assert high.average_steady_state() / low.average_steady_state() > 2
+    n = min(high.doses_needed(), 200)
+    t = high.grid(n)
+    peak, trough = steady_state_peak_trough(t, high.repeated(t, n), high.tau)
+    assert 10 <= trough and peak <= 20
+    assert 7 <= high.half_life() <= 42
