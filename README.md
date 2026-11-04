@@ -49,6 +49,18 @@ and target attainment (share of patients whose whole steady-state interval sits 
 loading dose that reaches the steady-state peak at once (exactly `Dose / (1 - exp(-k*tau))` for a
 one-compartment bolus).
 
+`src/tdm.py`: therapeutic drug monitoring. Given measured levels, Bayesian MAP estimation finds
+the patient's own parameters: the ones that best explain the levels, penalised for straying from
+the typical values by the population variability (prior). Error model: additive assay SD plus a
+proportional CV.
+
+`src/pd.py`: from concentration to effect. Sigmoid Emax (Hill) model, plus an effect compartment
+(`dCe/dt = ke0 * (C - Ce)`, solved exactly for piecewise-linear C) for effects that lag behind
+plasma, which shows up as a hysteresis loop.
+
+`src/settings.py`: saving, loading and sharing inputs as JSON or URL query parameters, with
+every value type- and range-checked on the way back in.
+
 ## The app
 
 `streamlit run app.py`. The sidebar holds every input: preset, route (oral, IV bolus, IV infusion),
@@ -74,7 +86,23 @@ and the therapeutic window. Four tabs:
 
   ![Regimen finder](figures/app_regimen_finder.png)
 
+- **Fit to levels**: type in measured levels (time after the first dose, mg/L), choose which
+  parameters to estimate, and see the population prediction next to the curve fitted to this
+  patient. "Use the fitted parameters" moves the sidebar, so the other tabs, including the regimen
+  finder, then work for this patient:
+
+  ![Fitting to measured levels](figures/app_fit_levels.png)
+
+- **Effect (PD)**: effect over time under repeated dosing, the steady-state range of effect, time
+  at a target effect, and the hysteresis loop of effect against concentration after one dose:
+
+  ![Effect and hysteresis](figures/app_effect.png)
+
 - **About the models**: the bathtub analogies, in short.
+
+The sidebar's **Save and share** section downloads the scenario as JSON, loads one back, or puts
+every setting in the page's URL, so a link (e.g. `?preset=Phenytoin&dose=130`) opens the app in
+exactly that state.
 
 ## Setup
 
@@ -107,8 +135,14 @@ The tests check that:
   a constant infusion, and more than doubles AUC when the dose doubles
 - Cockcroft-Gault, allometric and renal scaling, log-normal sampling (median and CV), the regimen
   finder's peaks and troughs, and the loading-dose formula
+- level fitting recovers the true CL and V from rich data, shrinks towards the prior with one level,
+  and works for saturable elimination (Vmax)
+- the effect compartment matches a numerical solution, reaches half a constant level after one
+  ke0 half-life, and the Emax model gives half its effect at EC50
+- saved and shared settings round-trip, and invalid or unknown values are rejected
 - the Streamlit app runs without errors for every preset and every route x compartments x
-  elimination combination (`tests/test_app.py`, Streamlit's `AppTest`)
+  elimination combination, fits example levels and applies them, and restores a shared link
+  (`tests/test_app.py`, Streamlit's `AppTest`)
 
 ## Deploy
 
@@ -124,10 +158,13 @@ src/metrics.py     Cmax, Tmax, AUC, half-life, steady state, time in window
 src/patient.py     weight and kidney-function adjustment (Cockcroft-Gault)
 src/population.py  between-patient variability, bands, target attainment
 src/dosing.py      regimen finder and loading dose
+src/tdm.py         Bayesian fitting to measured levels
+src/pd.py          effect compartment and Emax model
+src/settings.py    save, load and share settings (JSON, URL)
 src/charts.py      interactive Plotly charts for the app
 src/plotting.py    static matplotlib figure for the README
 src/presets.py     drug presets for the app
-tests/             pytest checks (models, presets, patient/population, dosing, app)
+tests/             pytest checks (models, presets, patient/population, dosing, TDM/PD/settings, app)
 app.py             Streamlit app
 make_figure.py     builds figures/single_vs_multiple.png
 notebooks/         exploration

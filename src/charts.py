@@ -95,3 +95,46 @@ def histogram(values, name, window_edge=None):
     if window_edge:
         fig.add_vline(x=window_edge, line=dict(color=AQUA, width=2, dash="dash"))
     return fig
+
+
+def fitted_levels(t, prior, fitted, times, levels, window, log=False):
+    """Measured levels against the population (prior) and fitted (this patient) curves."""
+    fig = _base(log, max(prior.max(), fitted.max(), max(levels, default=0), window[1]) or 1.0)
+    _window(fig, window)
+    _line(fig, t, prior, "Population prediction", GREY, dash="dot", width=1.5)
+    _line(fig, t, fitted, "Fitted to this patient", BLUE)
+    fig.add_trace(go.Scatter(x=list(times), y=list(levels), mode="markers", name="Measured levels",
+                             marker=dict(color=ORANGE, size=11, symbol="circle", line=dict(color="white", width=1.5)),
+                             hovertemplate="%{y:.3g} mg/L at %{x:.1f} h"))
+    fig.update_xaxes(range=[0, t[-1]])
+    return fig
+
+
+def effect_profile(t, effect, label, target=None):
+    """Effect over time, for the repeated-dosing curve."""
+    fig = go.Figure()
+    fig.update_layout(template="plotly_white", paper_bgcolor=SURFACE, plot_bgcolor=SURFACE, height=380,
+                      font=dict(family=FONT), margin=dict(l=10, r=10, t=10, b=10), hovermode="x unified",
+                      legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5))
+    fig.update_xaxes(title="Time (h)", showgrid=False, linecolor=GREY, range=[0, t[-1]])
+    fig.update_yaxes(title=label, gridcolor=GRID, linecolor=GREY)
+    if target is not None:
+        fig.add_hline(y=target, line=dict(color=AQUA, width=2, dash="dash"), annotation_text="Target effect",
+                      annotation_position="top left", annotation_font=dict(color=GREY, size=11))
+    _line(fig, t, effect, "Effect, repeated dosing", "#8a5cd6")
+    return fig
+
+
+def hysteresis(c, effect, t, label):
+    """Effect against plasma concentration after one dose, coloured by time. With an
+    effect-site delay the rising and falling limbs differ, tracing a loop."""
+    fig = go.Figure(go.Scatter(
+        x=c, y=effect, mode="lines+markers", name="Single dose",
+        marker=dict(size=4, color=t, colorscale="Viridis", showscale=True, colorbar=dict(title="h")),
+        line=dict(color=GRID, width=1), hovertemplate="C %{x:.3g} mg/L, effect %{y:.3g}<extra></extra>"))
+    fig.update_layout(template="plotly_white", paper_bgcolor=SURFACE, plot_bgcolor=SURFACE, height=380,
+                      font=dict(family=FONT), margin=dict(l=10, r=10, t=30, b=10), showlegend=False,
+                      title=dict(text="Effect vs plasma concentration, one dose", x=0, font=dict(size=13)))
+    fig.update_xaxes(title="Plasma concentration (mg/L)", gridcolor=GRID)
+    fig.update_yaxes(title=label, gridcolor=GRID)
+    return fig

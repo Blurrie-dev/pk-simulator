@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from src import charts, dosing, patient, population
+from src import charts, dosing, patient, population, settings, tdm
+from src import pd as pharmacodynamics
 from src.metrics import (auc, average_steady_state, cmax, half_life, steady_state_peak_trough,
                          time_in_window, time_to_steady_state, tmax)
 from src.models import two_compartment_constants
@@ -66,6 +67,48 @@ def apply_regimen(dose, tau):
     set_value("tau", int(tau))
 
 
+def apply_fit(factors):
+    """Scale the sidebar values by fitted / prior. A ratio works whether or not the
+    patient panel is adjusting them, and vmax's per-day units cancel."""
+    for key, factor in factors.items():
+        set_value(key, settings.clamp(key, st.session_state[key] * factor))
+
+
+def apply_settings(values):
+    for key, value in values.items():
+        set_value(key, value)
+
+
+def load_file():
+    upload = st.session_state.get("upload")
+    if upload is None:
+        return
+    try:
+        values, rejected = settings.from_json(upload.getvalue().decode())
+    except ValueError:
+        st.session_state.load_message = ("error", "That file isn't a saved scenario (JSON).")
+        return
+    apply_settings(values)
+    st.session_state.load_message = ("success", f"Loaded {len(values)} settings"
+                                     + (f"; ignored {', '.join(rejected)}" if rejected else "") + ".")
+
+
+def share_link():
+    st.query_params.clear()
+    st.query_params.update(settings.to_query(st.session_state))
+
+
+def fill_example_levels(scenario):
+    """Two levels from a made-up patient who clears the drug 40% faster than typical,
+    measured around the 4th dose: a peak-ish level and a trough."""
+    from dataclasses import replace as _replace
+    truth = _replace(scenario, cl=scenario.cl * 1.4, vmax=scenario.vmax * 1.4)
+    times = [3 * scenario.tau + min(2.0, scenario.tau / 2), 4 * scenario.tau - 0.25]
+    levels = tdm.predict(truth, times)
+    st.session_state.levels_data = pd.DataFrame({"time_h": times, "level_mg_L": np.round(levels, 2)})
+    st.session_state.levels_version += 1
+
+
 def pin(label, t, c):
     st.session_state.comparisons = (st.session_state.comparisons + [(label, t, c)])[-MAX_COMPARISONS:]
 
@@ -92,7 +135,15 @@ def simulate_population(scenario_dict, cv, n_patients, seed, n_doses):
 if "preset" not in st.session_state:  # first run in this browser tab
     st.session_state.preset = next(iter(PRESETS))
     st.session_state.comparisons = []
+    st.session_state.update(weight=70.0, age=40, sex="Male", scr=1.0, late_hours=4.0, adjust=False,
+                            double_next=False, levels_version=0,
+                            levels_data=pd.DataFrame({"time_h": [], "level_mg_L": []}))
     load_preset()
+    shared, _rejected = settings.parse(st.query_params.to_dict())  # a shared link
+    if "preset" in shared:
+        st.session_state.preset = shared["preset"]
+        load_preset()
+    apply_settings(shared)
 
 st.set_page_config(page_title="PK simulator", layout="wide")
 
@@ -133,7 +184,7 @@ with st.sidebar:
         missed = st.number_input("Miss dose number (0 = none)", 0, MAX_DOSES, key="missed")
         double_next = st.checkbox("...and double the next one to make up", key="double_next")
         late_dose = st.number_input("Take dose number late (0 = none)", 0, MAX_DOSES, key="late_dose")
-        late_hours = st.slider("...by this many hours", 0.5, 24.0, 4.0, 0.5, key="late_hours")
+        late_hours = st.slider("...by this many hours", 0.5, 24.0, step=0.5, key="late_hours")
 
     st.subheader("Pharmacokinetics", divider="gray")
     st.caption("Values for a typical 70 kg adult. Adjust for a patient below.")
@@ -158,10 +209,10 @@ with st.sidebar:
     st.subheader("Patient", divider="gray")
     adjust = st.toggle("Adjust for a specific patient", key="adjust")
     if adjust:
-        weight = st.slider("Weight (kg)", 3.0, 250.0, 70.0, 0.5, key="weight")
-        age = st.slider("Age (years)", 18, 100, 40, key="age")
+        weight = st.slider("Weight (kg)", 3.0, 250.0, step=0.5, key="weight")
+        age = st.slider("Age (years)", 18, 100, key="age")
         female = st.radio("Sex", ["Male", "Female"], horizontal=True, key="sex") == "Female"
-        scr = st.slider("Serum creatinine (mg/dL)", 0.2, 10.0, 1.0, 0.1, key="scr")
+        scr = st.slider("Serum creatinine (mg/dL)", 0.2, 10.0, step=0.1, key="scr")
         fe = st.slider("Fraction cleared by the kidneys, fe", 0.0, 1.0, step=0.01, key="fe",
                        help="Share of CL that follows kidney function; set by the preset.")
         crcl = patient.cockcroft_gault(age, weight, scr, female)
@@ -173,6 +224,16 @@ with st.sidebar:
     window = (low_col.number_input("Lower", 0.0, 1000.0, step=0.5, key="window_lo"),
               high_col.number_input("Upper", 0.0, 1000.0, step=0.5, key="window_hi"))
     has_window = window[1] > window[0]
+
+    st.subheader("Save and share", divider="gray")
+    st.download_button("Save scenario (JSON)", settings.to_json(st.session_state), "pk_scenario.json",
+                       "application/json", icon=":material/save:", width="stretch")
+    st.file_uploader("Load a saved scenario", type="json", key="upload", on_change=load_file)
+    if "load_message" in st.session_state:
+        kind, text = st.session_state.pop("load_message")
+        getattr(st, kind)(text)
+    st.button("Put this scenario in the link", on_click=share_link, icon=":material/link:", width="stretch",
+              help="Updates the address bar; copy it to share exactly these settings.")
 
 
 # --- build the scenario -------------------------------------------------------------
@@ -210,8 +271,9 @@ if scenario.saturated():
              f"Vmax ({scenario.vmax * 24:.0f} mg/day): elimination is maxed out, so concentrations keep "
              "rising with every dose. There is no steady state.")
 
-profile_tab, population_tab, finder_tab, about_tab = st.tabs(
-    ["Concentration-time", "Population variability", "Regimen finder", "About the models"])
+profile_tab, population_tab, finder_tab, fit_tab, effect_tab, about_tab = st.tabs(
+    ["Concentration-time", "Population variability", "Regimen finder", "Fit to levels", "Effect (PD)",
+     "About the models"])
 
 with profile_tab:
     opt1, opt2, opt3 = st.columns(3)
@@ -369,6 +431,91 @@ with finder_tab:
         st.button("Use this loading dose", on_click=lambda v=ld: st.session_state.update(loading=int(round(v, -1))),
                   icon=":material/bolt:")
 
+with fit_tab:
+    st.markdown("Measured a patient's blood levels? Enter them with the time since the **first** dose "
+                "(the schedule in the sidebar is assumed to have been followed). The fit finds this "
+                "patient's parameters, pulled towards the typical values as much as the population "
+                "variability (Population tab) says is plausible: Bayesian (MAP) estimation, as in TDM software.")
+    e1, e2 = st.columns([3, 2])
+    with e1:
+        levels_df = st.data_editor(
+            st.session_state.levels_data, num_rows="dynamic", width="stretch",
+            key=f"levels_{st.session_state.levels_version}",
+            column_config={"time_h": st.column_config.NumberColumn("Time after first dose (h)", min_value=0.0),
+                           "level_mg_L": st.column_config.NumberColumn("Level (mg/L)", min_value=0.0)})
+        st.button("Fill in example levels", on_click=fill_example_levels, args=(scenario,))
+        st.caption("The example: two levels from a made-up patient who clears the drug 40% faster than typical.")
+    with e2:
+        options = ["vmax", "km", "vd", "ka"] if saturable else ["cl", "vd", "ka"]
+        if not oral:
+            options = [o for o in options if o != "ka"]
+        names = {"cl": "CL", "vd": "V", "ka": "ka", "vmax": "Vmax", "km": "Km"}
+        to_fit = st.multiselect("Parameters to estimate", options, [o for o in options if o in ("cl", "vmax")] +
+                                (["vd"] if "vd" in options else []), format_func=names.get, key="fit_params",
+                                help="With one or two levels, estimate one or two parameters at most.")
+        sd_add = st.number_input("Assay error, SD (mg/L)", 0.0, 10.0, 0.1, 0.05, key="sd_add")
+        cv_prop = st.slider("Proportional error (CV %)", 1, 50, 15, key="cv_prop") / 100
+    data = levels_df.dropna()
+    data = data[(data.time_h > 0) & (data.level_mg_L > 0)]
+    if data.empty:
+        st.info("Add at least one level to fit.")
+    else:
+        prior_cv = {**cv, "km": cv.get("km", 0.3), "vmax": cv.get("vmax", 0.3), "ka": cv.get("ka", 0.4)}
+        result = tdm.fit(scenario, data.time_h.values, data.level_mg_L.values, prior_cv, to_fit, sd_add, cv_prop)
+        n_fit = max(n_doses, tdm.doses_before(scenario, data.time_h.max()) + 1)
+        ft = scenario.grid(n_fit)
+        with st.container(border=True):
+            st.plotly_chart(charts.fitted_levels(ft, scenario.repeated(ft, n_fit), result.scenario.repeated(ft, n_fit),
+                                                 data.time_h, data.level_mg_L, window, st.session_state.get("log")),
+                            width="stretch", key="fit_chart")
+        rows = [{"Parameter": names[p], "Typical / patient-adjusted": getattr(scenario, p) * (24 if p == "vmax" else 1),
+                 "Fitted": getattr(result.scenario, p) * (24 if p == "vmax" else 1),
+                 "Change": f"{result.factors[p] - 1:+.0%}"} for p in result.factors]
+        st.dataframe(pd.DataFrame(rows).style.format({"Typical / patient-adjusted": "{:.3g}", "Fitted": "{:.3g}"}),
+                     hide_index=True, width="stretch")
+        st.caption("Vmax in mg/day. " + ("Fitted half-life: "
+                   f"{result.scenario.half_life():.1f} h (typical {scenario.half_life():.1f} h)."
+                   if np.isfinite(result.scenario.half_life()) else ""))
+        st.button("Use the fitted parameters", on_click=apply_fit, args=(result.factors,), icon=":material/check:",
+                  help="Moves the sidebar values, so the other tabs (and the Regimen finder) use this patient.")
+
+with effect_tab:
+    st.markdown("From concentration to effect, with the sigmoid Emax (Hill) model. A delay `ke0` "
+                "lets the effect lag behind plasma, as when a drug acts in the brain: the effect then "
+                "traces a loop against concentration (hysteresis) instead of a line.")
+    d1, d2, d3, d4, d5 = st.columns(5)
+    default_ec50 = float(round(np.sqrt(window[0] * window[1]), 2)) if window[0] > 0 and has_window else \
+        float(round(max(average_steady_state(t, regular, scenario.tau), 0.01), 2))
+    e0 = d1.number_input("Baseline, E0", -1000.0, 1000.0, 0.0, key="e0")
+    emax_value = d2.number_input("Emax", -1000.0, 1000.0, 100.0, key="emax",
+                                 help="Maximum change from baseline; negative for a drug that lowers something.")
+    ec50 = d3.number_input("EC50 (mg/L)", 0.001, 10000.0, default_ec50, key="ec50")
+    hill = d4.number_input("Hill coefficient", 0.1, 10.0, 1.0, 0.1, key="hill")
+    delay = d5.number_input("Delay half-life (h)", 0.0, 48.0, 1.0, 0.25, key="ke0_half",
+                            help="ln(2) / ke0. 0 = effect follows plasma instantly.")
+    label = st.text_input("Effect name", "Effect (%)", key="effect_label")
+    ke0 = np.inf if delay == 0 else np.log(2) / delay
+    effect = pharmacodynamics.emax_effect(pharmacodynamics.effect_site(t, multi, ke0), e0, emax_value, ec50, hill)
+    target = st.number_input("Target effect (optional, 0 = none)", -1000.0, 1000.0, 0.0, key="target_effect")
+    st.plotly_chart(charts.effect_profile(t, effect, label, target or None), width="stretch", key="effect_chart")
+    if reached:
+        last = t >= t[-1] - scenario.tau
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Highest effect at steady state", f"{effect[last].max():.3g}", border=True)
+        k2.metric("Lowest effect at steady state", f"{effect[last].min():.3g}", border=True)
+        if target:
+            above = effect[last] >= target if emax_value >= 0 else effect[last] <= target
+            k3.metric("Time at target", f"{above.mean():.0%}", border=True,
+                      help="Share of a steady-state interval at or beyond the target effect.")
+    t_half = scenario.half_life()
+    span = min(t[-1], max(scenario.tau, 5 * t_half if np.isfinite(t_half) else scenario.tau))
+    single_t = np.union1d(np.linspace(0, span, 400), [scenario.duration] if infusion else [])
+    single_c = scenario.single(single_t)
+    single_effect = pharmacodynamics.emax_effect(pharmacodynamics.effect_site(single_t, single_c, ke0),
+                                                 e0, emax_value, ec50, hill)
+    st.plotly_chart(charts.hysteresis(single_c, single_effect, single_t, label), width="stretch",
+                    key="hysteresis_chart")
+
 with about_tab:
     st.markdown(r"""
 **One compartment.** The body is one well-mixed bathtub of volume $V_d$. Drug drains at a rate
@@ -390,6 +537,13 @@ Phenytoin is the classic example.
 
 **Patient adjustment.** Volumes scale with weight, clearances with weight$^{0.75}$ (allometry).
 The renal part of clearance (fraction $f_e$) follows creatinine clearance from Cockcroft-Gault.
+
+**Fitting to levels (TDM).** Bayesian MAP estimation: the parameters that best explain the
+measured levels, penalised for straying from the typical values by the population variability.
+One level mostly moves one parameter; several levels across an interval pin down CL and V.
+
+**Effect (PD).** Sigmoid Emax: $E = E_0 + E_{max} C_e^n / (EC_{50}^n + C_e^n)$, with an effect
+compartment $dC_e/dt = k_{e0} (C - C_e)$ for effects that lag behind plasma.
 
 **Population variability.** Each parameter is the typical value times $e^{\eta}$, with $\eta$
 normally distributed: a log-normal spread, as in population PK software.
