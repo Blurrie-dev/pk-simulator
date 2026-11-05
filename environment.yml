@@ -7,4 +7,6 @@ dependencies:
   - scipy
   - matplotlib
   - streamlit
+  - plotly
+  - pandas
   - pytest

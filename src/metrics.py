@@ -71,3 +71,26 @@ def time_to_steady_state(t, c, tau, fraction=0.95):
     troughs = c[lowest]
     first = np.argmax(troughs >= fraction * troughs[-1])  # argmax of booleans = first True
     return t[lowest[first]]
+
+
+def _last_interval(t, c, tau):
+    last = _intervals(t, tau)[-1]
+    return t[last], c[last]
+
+
+def average_steady_state(t, c, tau):
+    """Average concentration over the last dosing interval: AUC over tau / tau (mg/L)."""
+    tl, cl = _last_interval(t, c, tau)
+    return auc(tl, cl) / tau
+
+
+def time_in_window(t, c, tau, window):
+    """Fraction of the last dosing interval spent inside the window [lower, upper].
+
+    Each trapezoid slice counts as inside when both its ends are, a fine
+    approximation on the app's 100-points-per-interval grid.
+    """
+    tl, cl = _last_interval(t, c, tau)
+    inside = (cl >= window[0]) & (cl <= window[1])
+    both = inside[1:] & inside[:-1]
+    return np.sum(np.diff(tl)[both]) / (tl[-1] - tl[0])

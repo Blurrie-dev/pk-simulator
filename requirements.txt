@@ -3,3 +3,5 @@ scipy
 matplotlib
 streamlit
 pytest
+plotly
+pandas

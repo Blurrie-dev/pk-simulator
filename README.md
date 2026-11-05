@@ -1,5 +1,8 @@
 # pk-simulator
 
+[![tests](https://github.com/Blurrie-dev/pk-simulator/actions/workflows/ci.yml/badge.svg)](https://github.com/Blurrie-dev/pk-simulator/actions/workflows/ci.yml)
+
+
 Interactive pharmacokinetic simulator: plasma concentration over time for different doses,
 routes and dosing intervals.
 
@@ -18,13 +21,91 @@ equals the amount given. That's steady state, about 4 to 5 half-lives in, whatev
 
 - One-compartment IV bolus: `C(t) = Dose/Vd * exp(-k*t)` with `k = CL/Vd`
 - One-compartment oral, first-order absorption `ka` and bioavailability `F` (Bateman function)
-- The same one-compartment model solved numerically with `scipy.integrate.solve_ivp`, as a check
-- Two-compartment IV (central + peripheral), ODE system solved with `solve_ivp`
-- Multiple dosing every `tau` hours, by superposition of single doses (valid for linear PK)
+- One-compartment IV infusion: constant rate `R = Dose/T` for `T` hours, then exponential decay
+- Two-compartment (central V1 + peripheral V2, exchanging at `Q`) for IV bolus, IV infusion and
+  oral dosing, all analytical (sums of exponentials, rates alpha and beta)
+- Saturable, Michaelis-Menten elimination `Vmax * C / (Km + C)`, as with phenytoin, solved
+  numerically dose by dose (`simulate_ode`), with one or two compartments and any route
+- Repeated dosing by superposition of single doses (valid for linear PK), for any dose schedule:
+  regular, with a loading dose, or with a missed (optionally doubled-up) or late dose
+- Every analytical model is cross-checked against the numerical solution of the same equations
+
+`src/simulate.py` bundles drug, regimen and model choices into a `Scenario`, the single code path
+the app and the tests share.
 
 `src/metrics.py`, computed from the simulated curve: Cmax, Tmax, AUC (trapezoidal), terminal
-half-life (log-linear fit), steady-state peak and trough, time to steady state (95% of the
-steady-state trough).
+half-life (log-linear fit), steady-state peak, trough and average, time to steady state (95% of
+the steady-state trough), time in the therapeutic window.
+
+`src/patient.py`: adjusts the typical-adult parameters for one patient. Volumes scale with weight,
+clearances with weight^0.75 (allometry), and the renal fraction `fe` of clearance follows
+creatinine clearance from the Cockcroft-Gault equation. The default patient (70 kg, 40 y, male,
+creatinine 1.0 mg/dL) leaves the presets unchanged.
+
+`src/population.py`: variability between patients. Each simulated patient's CL, V, ka (and Vmax)
+is the typical value times `exp(eta)`, `eta ~ Normal(0, ln(1 + CV^2))`, the log-normal model used
+by population PK software. Gives percentile bands, the spread of steady-state peaks and troughs,
+and target attainment (share of patients whose whole steady-state interval sits in the window).
+
+`src/dosing.py`: for each candidate interval, the dose that centres steady state in the window
+(one simulation per interval, then scaling, since linear PK is proportional to dose), and the
+loading dose that reaches the steady-state peak at once (exactly `Dose / (1 - exp(-k*tau))` for a
+one-compartment bolus).
+
+`src/tdm.py`: therapeutic drug monitoring. Given measured levels, Bayesian MAP estimation finds
+the patient's own parameters: the ones that best explain the levels, penalised for straying from
+the typical values by the population variability (prior). Error model: additive assay SD plus a
+proportional CV.
+
+`src/pd.py`: from concentration to effect. Sigmoid Emax (Hill) model, plus an effect compartment
+(`dCe/dt = ke0 * (C - Ce)`, solved exactly for piecewise-linear C) for effects that lag behind
+plasma, which shows up as a hysteresis loop.
+
+`src/settings.py`: saving, loading and sharing inputs as JSON or URL query parameters, with
+every value type- and range-checked on the way back in.
+
+## The app
+
+`streamlit run app.py`. The sidebar holds every input: preset, route (oral, IV bolus, IV infusion),
+one or two compartments, linear or saturable elimination, dose and interval, loading dose, a
+missed or late dose, the PK parameters, an optional patient (weight, age, sex, serum creatinine)
+and the therapeutic window. Four tabs:
+
+- **Concentration-time**: interactive Plotly chart (hover, zoom, log scale, dose markers), single
+  vs repeated dosing, pin up to four curves to compare regimens, CSV download, and the metrics.
+  A missed or late dose is drawn against the regular schedule:
+
+  ![Missed dose](figures/app_what_if.png)
+
+- **Population variability**: 100 to 1000 simulated patients (20 to 50 with saturable
+  elimination, which is solved numerically), 50% and 90% bands, peak and trough histograms and
+  target attainment:
+
+  ![Population bands](figures/app_population.png)
+
+- **Regimen finder**: dose per interval and whether it fits the window, with buttons to apply the
+  regimen or a suggested loading dose. Theophylline's 8 h half-life can't fit its 10-20 mg/L
+  window with once-daily dosing, whatever the dose:
+
+  ![Regimen finder](figures/app_regimen_finder.png)
+
+- **Fit to levels**: type in measured levels (time after the first dose, mg/L), choose which
+  parameters to estimate, and see the population prediction next to the curve fitted to this
+  patient. "Use the fitted parameters" moves the sidebar, so the other tabs, including the regimen
+  finder, then work for this patient:
+
+  ![Fitting to measured levels](figures/app_fit_levels.png)
+
+- **Effect (PD)**: effect over time under repeated dosing, the steady-state range of effect, time
+  at a target effect, and the hysteresis loop of effect against concentration after one dose:
+
+  ![Effect and hysteresis](figures/app_effect.png)
+
+- **About the models**: the bathtub analogies, in short.
+
+The sidebar's **Save and share** section downloads the scenario as JSON, loads one back, or puts
+every setting in the page's URL, so a link (e.g. `?preset=Phenytoin&dose=130`) opens the app in
+exactly that state.
 
 ## Setup
 
@@ -50,6 +131,21 @@ The tests check that:
 - AUC = F * Dose / CL
 - steady state takes 4 to 5 half-lives for doses of 50, 500 and 5000 mg
 - each drug preset reproduces what its sources observed (below)
+- infusion, two-compartment (IV, oral, infusion) and irregular schedules (loading, missed and late
+  doses) match the numerical ODE solution within 0.01%; infusions plateau at `R/CL`; AUC =
+  F * Dose / CL holds for two compartments too
+- saturable elimination reduces to linear when Km is large, reaches `Css = Km*R/(Vmax-R)` under
+  a constant infusion, and more than doubles AUC when the dose doubles
+- Cockcroft-Gault, allometric and renal scaling, log-normal sampling (median and CV), the regimen
+  finder's peaks and troughs, and the loading-dose formula
+- level fitting recovers the true CL and V from rich data, shrinks towards the prior with one level,
+  and works for saturable elimination (Vmax)
+- the effect compartment matches a numerical solution, reaches half a constant level after one
+  ke0 half-life, and the Emax model gives half its effect at EC50
+- saved and shared settings round-trip, and invalid or unknown values are rejected
+- the Streamlit app runs without errors for every preset and every route x compartments x
+  elimination combination, fits example levels and applies them, and restores a shared link
+  (`tests/test_app.py`, Streamlit's `AppTest`)
 
 ## Deploy
 
@@ -59,11 +155,19 @@ Cloud installs from `environment.yml` (conda) rather than `requirements.txt`.
 ## Structure
 
 ```
-src/models.py      PK models
-src/metrics.py     Cmax, Tmax, AUC, half-life, time to steady state
-src/plotting.py    concentration-time plot used by the app and the figure
+src/models.py      PK models: analytical, numerical, dose schedules, superposition
+src/simulate.py    Scenario: drug + regimen + model choices -> curves
+src/metrics.py     Cmax, Tmax, AUC, half-life, steady state, time in window
+src/patient.py     weight and kidney-function adjustment (Cockcroft-Gault)
+src/population.py  between-patient variability, bands, target attainment
+src/dosing.py      regimen finder and loading dose
+src/tdm.py         Bayesian fitting to measured levels
+src/pd.py          effect compartment and Emax model
+src/settings.py    save, load and share settings (JSON, URL)
+src/charts.py      interactive Plotly charts for the app
+src/plotting.py    static matplotlib figure for the README
 src/presets.py     drug presets for the app
-tests/test_pk.py   pytest checks
+tests/             pytest checks (models, presets, patient/population, dosing, TDM/PD/settings, app)
 app.py             Streamlit app
 make_figure.py     builds figures/single_vs_multiple.png
 notebooks/         exploration
@@ -71,7 +175,7 @@ notebooks/         exploration
 
 ## Drug presets
 
-The app has a preset menu: a hypothetical drug (also used for the figure above) and 16 real
+The app has a preset menu: a hypothetical drug (also used for the figure above) and 17 real
 drugs with published values. Each preset sets the route its values were measured for; you can
 switch route afterwards to compare. Per-kg values are scaled to a 70 kg adult and rounded to 0.1 to fit
 the slider steps. 1 mcg/mL = 1 mg/L. These are population averages for teaching, not for clinical
@@ -294,6 +398,45 @@ Check: steady-state AUC0-24 656 against 632 (SD 78) and half-life 7.7 h against 
 [17]. The model's peak (67 mg/L) is well under the label's 93.9: like vancomycin, daptomycin has a
 distribution phase a one-compartment model can't show.
 
+### Phenytoin, oral (saturable elimination)
+
+| Parameter | In the app | Published value | Source |
+|---|---|---|---|
+| Vmax | 490 mg/day | 7 mg/kg/day, typical adult | [18] |
+| Km | 4 mg/L | 4 mg/L, typical adult | [18] |
+| V | 45.5 L | 0.65 L/kg | [18] |
+| ka | 0.3 /h | Not reported. Chosen so Tmax is about 8 h, inside 4-12 h for extended capsules | derived from [19] |
+| F | 0.92 | phenytoin sodium is 92% phenytoin; absorption taken as complete | - |
+| Dose, tau | 100 mg every 8 h | initial adult dose 100 mg three times daily | [19] |
+| Window | 10-20 mg/L | therapeutic range 10-20 mcg/mL | [19] |
+
+The point of this preset is non-linearity: 300 mg/day settles near 5 mg/L, while 390 mg/day (30%
+more) settles near 11 mg/L, more than double. Near steady state the gap closes much more slowly
+than the half-life suggests, so it takes about a week to settle.
+
+Check (in `tests/test_pk.py`): 390 mg/day more than doubles the 300 mg/day steady state, sits
+inside 10-20 mg/L, and the half-life there (21.6 h) is inside the label's 7-42 h.
+
+These values were added without re-reading [18] and [19] (the session that added them couldn't
+reach DailyMed); they are standard textbook values but should be checked against the sources.
+
+### Kidney function (fe)
+
+The patient panel needs the fraction of each drug's clearance that goes through the kidneys
+(`fe`, fraction excreted unchanged in urine). The values in `src/presets.py` are approximate,
+from the labels' pharmacokinetics sections as commonly quoted, and **still need checking against
+the cited labels** (DailyMed wasn't reachable when they were added):
+
+| Drug | fe | | Drug | fe |
+|---|---|---|---|---|
+| Gentamicin, amikacin | 0.95 | | Lacosamide, doxycycline | 0.4 |
+| Pregabalin | 0.9 | | Linezolid | 0.3 |
+| Levofloxacin | 0.87 | | Metronidazole | 0.2 |
+| Fluconazole, vancomycin | 0.8 | | Theophylline, lamotrigine | 0.1 |
+| Topiramate | 0.7 | | Phenytoin | 0.05 |
+| Levetiracetam | 0.66 | | Valproate | 0.03 |
+| Daptomycin | 0.5 | | Hypothetical drug | 0.5 (made up) |
+
 ### Screened but not added
 
 These labels were checked and left out because the one-compartment model can't use them honestly:
@@ -356,6 +499,11 @@ These labels were checked and left out because the one-compartment model can't u
 17. Cubicin RF (daptomycin), prescribing information. Merck Sharp & Dohme LLC. DailyMed, version of
     20 Jun 2025.
     https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=0b1a8885-2198-4a0e-8105-0c76c1cba6c2
+
+18. Winter ME. Basic Clinical Pharmacokinetics, 5th ed. Lippincott Williams & Wilkins; 2010.
+    Chapter on phenytoin (population Vmax, Km and V).
+19. Dilantin (extended phenytoin sodium capsules), prescribing information. Parke-Davis (Pfizer).
+    DailyMed.
 
 ## What I found
 
