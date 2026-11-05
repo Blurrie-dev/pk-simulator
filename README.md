@@ -1,5 +1,8 @@
 # pk-simulator
 
+[![tests](https://github.com/Blurrie-dev/pk-simulator/actions/workflows/ci.yml/badge.svg)](https://github.com/Blurrie-dev/pk-simulator/actions/workflows/ci.yml)
+
+
 Interactive pharmacokinetic simulator: plasma concentration over time for different doses,
 routes and dosing intervals.
 
